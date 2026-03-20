@@ -1096,12 +1096,9 @@ local function doDoppelganger()
             graniteMode=(rigMaterial==Enum.Material.Granite or rigMaterial==Enum.Material.Slate)
         end
 
-        -- Copy meshes from target character if setting is on
-        -- CharacterMesh objects live directly in the Character and define body part meshes
-        -- SpecialMesh/DataModelMesh can also be directly inside limb parts
+        -- Copy body meshes onto rig limbs if setting is on
         if doppelCopyMesh then
             task.spawn(function()
-                -- Map BodyPart enum → our rig part name
                 local bodyPartMap={
                     [Enum.BodyPart.Head]     = "Head",
                     [Enum.BodyPart.Torso]    = "Torso",
@@ -1110,54 +1107,54 @@ local function doDoppelganger()
                     [Enum.BodyPart.LeftLeg]  = "LeftLeg",
                     [Enum.BodyPart.RightLeg] = "RightLeg",
                 }
-                -- Also map char part names for SpecialMesh fallback
                 local charNameMap={
-                    Head="Head",Torso="Torso",
-                    ["Left Arm"]="LeftArm",["Right Arm"]="RightArm",
-                    ["Left Leg"]="LeftLeg",["Right Leg"]="RightLeg",
+                    Head="Head", Torso="Torso",
+                    ["Left Arm"]="LeftArm", ["Right Arm"]="RightArm",
+                    ["Left Leg"]="LeftLeg", ["Right Leg"]="RightLeg",
                 }
+                -- track which rig parts already got a mesh so we don't double-apply
+                local meshed={}
 
-                -- First pass: CharacterMesh objects in Character root
+                -- Pass 1: CharacterMesh instances in char root (body packages)
                 for _,cm in tChar:GetChildren() do
-                    if cm:IsA("CharacterMesh") then
-                        local rigNm=bodyPartMap[cm.BodyPart]
-                        if not rigNm then continue end
-                        local dst=rp[rigNm]
-                        if not dst or not dst.Parent then continue end
-                        local src=tChar:FindFirstChild(rigNm=="LeftArm" and "Left Arm"
-                            or rigNm=="RightArm" and "Right Arm"
-                            or rigNm=="LeftLeg"  and "Left Leg"
-                            or rigNm=="RightLeg" and "Right Leg"
-                            or rigNm)
-                        f3x("CreateMeshes",{{Part=dst}}); task.wait(0.1)
-                        local sd={Part=dst}
-                        if cm.MeshId~="" then sd.MeshId="rbxassetid://"..cm.MeshId end
-                        if cm.OverlayTextureId~="" then sd.TextureId="rbxassetid://"..cm.OverlayTextureId end
-                        -- Scale: our part is S× larger than normal (S=1 after doppel shrink so 1:1)
-                        local srcSize = src and src.Size or Vector3.one
-                        local ratio   = dst.Size / srcSize
-                        sd.Scale = Vector3.new(ratio.X, ratio.Y, ratio.Z)
-                        f3x("SyncMesh",{sd}); task.wait(0.05)
+                    if not cm:IsA("CharacterMesh") then continue end
+                    local rigNm=bodyPartMap[cm.BodyPart]
+                    if not rigNm then continue end
+                    local dst=rp[rigNm]
+                    if not dst or not dst.Parent then continue end
+
+                    f3x("CreateMeshes",{{Part=dst}}); task.wait(0.15)
+                    local sd={Part=dst, MeshType=Enum.MeshType.FileMesh}
+                    -- CharacterMesh.MeshId is a plain number string, needs rbxassetid://
+                    if cm.MeshId and cm.MeshId~="" then
+                        sd.MeshId = "rbxassetid://"..cm.MeshId
                     end
+                    if cm.OverlayTextureId and cm.OverlayTextureId~="" then
+                        sd.TextureId = "rbxassetid://"..cm.OverlayTextureId
+                    elseif cm.BaseTextureId and cm.BaseTextureId~="" then
+                        sd.TextureId = "rbxassetid://"..cm.BaseTextureId
+                    end
+                    sd.Scale = Vector3.one  -- S=1 after doppel so 1:1
+                    f3x("SyncMesh",{sd}); task.wait(0.05)
+                    meshed[rigNm]=true
                 end
 
-                -- Second pass: SpecialMesh directly inside limb parts (some games use these)
+                -- Pass 2: SpecialMesh inside the actual limb parts (fallback / some avatars)
                 for charNm, rigNm in charNameMap do
+                    if meshed[rigNm] then continue end  -- already done
                     local src=tChar:FindFirstChild(charNm)
                     local dst=rp[rigNm]
                     if not src or not dst or not dst.Parent then continue end
                     local mesh=src:FindFirstChildWhichIsA("SpecialMesh")
-                    if mesh and mesh.MeshId~="" then
-                        -- Only apply if no CharacterMesh already handled this part
-                        f3x("CreateMeshes",{{Part=dst}}); task.wait(0.1)
-                        local sd={Part=dst}
-                        sd.MeshId=mesh.MeshId
-                        if mesh.TextureId~="" then sd.TextureId=mesh.TextureId end
-                        if mesh.MeshType      then sd.MeshType=mesh.MeshType end
-                        local ratio=dst.Size/src.Size
-                        sd.Scale=mesh.Scale*Vector3.new(ratio.X,ratio.Y,ratio.Z)
-                        f3x("SyncMesh",{sd}); task.wait(0.05)
-                    end
+                    if not mesh or mesh.MeshId=="" then continue end
+                    f3x("CreateMeshes",{{Part=dst}}); task.wait(0.15)
+                    local sd={Part=dst}
+                    sd.MeshId   = mesh.MeshId    -- already full url inside parts
+                    sd.MeshType = mesh.MeshType
+                    sd.Scale    = mesh.Scale
+                    if mesh.TextureId~="" then sd.TextureId=mesh.TextureId end
+                    f3x("SyncMesh",{sd}); task.wait(0.05)
+                    meshed[rigNm]=true
                 end
             end)
         end
@@ -1248,23 +1245,38 @@ local function doDoppelganger()
                 found = modelGot or p
 
                 -- Style it
-                f.SetLocked(found,false); task.wait(0.02)
-                f3x("SyncResize",{{Part=found,CFrame=CFrame.new(gPos),Size=handle.Size}})
-                f3x("SyncColor",{{Part=found,Color=handle.Color,UnionColoring=false}})
+                f.SetLocked(found,false); task.wait(0.04)
+                f3x("SyncResize",  {{Part=found,CFrame=CFrame.new(gPos),Size=handle.Size}})
+                task.wait(0.03)
+                f3x("SyncColor",   {{Part=found,Color=handle.Color,UnionColoring=false}})
                 f3x("SyncMaterial",{{Part=found,Transparency=handle.Transparency,Material=handle.Material}})
                 f3x("SyncCollision",{{Part=found,CanCollide=false}})
-                f3x("SyncAnchor",{{Part=found,Anchored=true}})
-                task.wait(0.03)
+                f3x("SyncAnchor",  {{Part=found,Anchored=true}})
+                task.wait(0.05)
 
+                -- Apply mesh — CreateMeshes first, then set ALL properties in one SyncMesh call
                 local mesh=handle:FindFirstChildWhichIsA("SpecialMesh")
+                    or handle:FindFirstChildWhichIsA("DataModelMesh")
                 if mesh then
+                    f3x("CreateMeshes",{{Part=found}}); task.wait(0.15)
+                    local sd={Part=found, MeshType=Enum.MeshType.FileMesh}
+                    -- MeshId: use as-is (already full rbxassetid:// url usually)
+                    if mesh.MeshId and mesh.MeshId~="" then
+                        sd.MeshId = mesh.MeshId  -- F3X expects full url
+                    end
+                    if mesh.TextureId and mesh.TextureId~="" then
+                        sd.TextureId = mesh.TextureId
+                    end
+                    if mesh:IsA("SpecialMesh") then
+                        sd.MeshType = mesh.MeshType
+                        sd.Scale    = mesh.Scale
+                        sd.Offset   = mesh.Offset
+                    end
+                    f3x("SyncMesh",{sd}); task.wait(0.08)
+                else
+                    -- No SpecialMesh — try giving it a Brick mesh so it at least shows as a shape
                     f3x("CreateMeshes",{{Part=found}}); task.wait(0.12)
-                    local sd={Part=found}
-                    if mesh.MeshId~=""    then sd.MeshId=mesh.MeshId end
-                    if mesh.TextureId~="" then sd.TextureId=mesh.TextureId end
-                    if mesh.MeshType      then sd.MeshType=mesh.MeshType end
-                    sd.Scale=mesh.Scale
-                    f3x("SyncMesh",{sd}); task.wait(0.05)
+                    f3x("SyncMesh",{{Part=found,MeshType=Enum.MeshType.Brick,Scale=Vector3.one}}); task.wait(0.05)
                 end
 
                 -- Copy surface decals/textures from handle
@@ -2139,86 +2151,185 @@ print("[REANIMATE] v16 — Rainbow mode: Settings → Rig → 🌈 Rainbow Mode"
 
 -- ════════════════════════════════════════════════════════
 --  MOBILE CONTROLS
---  Shows automatically on touch devices (phone/tablet).
---  Left side: virtual joystick for movement.
---  Right side: action buttons grid.
 -- ════════════════════════════════════════════════════════
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local mobileTarget = nil   -- selected player for grab/cage/zap/doppel on mobile
 
 local function _buildMobileUI()
-    local mobileGui = Instance.new("ScreenGui", PG)
-    mobileGui.Name = "ReanimMobile"
-    mobileGui.ResetOnSpawn = false
-    mobileGui.IgnoreGuiInset = true
-    mobileGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    local G = Instance.new("ScreenGui", PG)
+    G.Name="ReanimMobile"; G.ResetOnSpawn=false
+    G.IgnoreGuiInset=true; G.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 
-    local function mCorner(p, r2) Instance.new("UICorner", p).CornerRadius = UDim.new(0, r2 or 8) end
+    local function mc(p,r) Instance.new("UICorner",p).CornerRadius=UDim.new(0,r or 10) end
+    local function ms(p,c,t) local s=Instance.new("UIStroke",p); s.Color=c; s.Thickness=t or 1.5 end
 
-    -- Joystick
-    local JOY_SIZE=120; local KNOB_SIZE=50; local JOY_MARGIN=20
-    local joyOuter=Instance.new("Frame",mobileGui)
-    joyOuter.Size=UDim2.new(0,JOY_SIZE,0,JOY_SIZE)
-    joyOuter.Position=UDim2.new(0,JOY_MARGIN,1,-(JOY_SIZE+JOY_MARGIN))
-    joyOuter.BackgroundColor3=Color3.fromRGB(255,255,255)
-    joyOuter.BackgroundTransparency=0.75
-    joyOuter.BorderSizePixel=0
-    mCorner(joyOuter,JOY_SIZE//2)
-    local joyKnob=Instance.new("Frame",joyOuter)
-    joyKnob.Size=UDim2.new(0,KNOB_SIZE,0,KNOB_SIZE)
-    joyKnob.AnchorPoint=Vector2.new(0.5,0.5)
-    joyKnob.Position=UDim2.new(0.5,0,0.5,0)
-    joyKnob.BackgroundColor3=Color3.fromRGB(255,255,255)
-    joyKnob.BackgroundTransparency=0.4
-    joyKnob.BorderSizePixel=0
-    mCorner(joyKnob,KNOB_SIZE//2)
+    -- ── Joystick ─────────────────────────────────────────
+    local JS=130; local KS=52; local JM=24
+    local jOuter=Instance.new("Frame",G)
+    jOuter.Size=UDim2.new(0,JS,0,JS)
+    jOuter.Position=UDim2.new(0,JM,1,-(JS+JM))
+    jOuter.BackgroundColor3=Color3.fromRGB(30,30,45)
+    jOuter.BackgroundTransparency=0.3
+    jOuter.BorderSizePixel=0; mc(jOuter,JS//2)
+    ms(jOuter,Color3.fromRGB(80,120,200),1.5)
+
+    local jKnob=Instance.new("Frame",jOuter)
+    jKnob.Size=UDim2.new(0,KS,0,KS)
+    jKnob.AnchorPoint=Vector2.new(0.5,0.5)
+    jKnob.Position=UDim2.new(0.5,0,0.5,0)
+    jKnob.BackgroundColor3=Color3.fromRGB(100,150,255)
+    jKnob.BackgroundTransparency=0.1
+    jKnob.BorderSizePixel=0; mc(jKnob,KS//2)
+
     local joyActive=false; local joyInputId=nil; local joyCenter=Vector2.zero
-    local JOY_RADIUS=JOY_SIZE*0.5-KNOB_SIZE*0.3
+    local JR=JS*0.5-KS*0.28
     local function updateJoy(pos)
-        local delta=pos-joyCenter; local mag=delta.Magnitude
-        local clamped=mag>JOY_RADIUS and delta.Unit*JOY_RADIUS or delta
-        joyKnob.Position=UDim2.new(0.5,clamped.X,0.5,clamped.Y)
-        mobileJoyVec=mag>8 and Vector2.new(clamped.X/JOY_RADIUS,clamped.Y/JOY_RADIUS) or Vector2.zero
+        local d=pos-joyCenter; local m=d.Magnitude
+        local cl=m>JR and d.Unit*JR or d
+        jKnob.Position=UDim2.new(0.5,cl.X,0.5,cl.Y)
+        mobileJoyVec=m>6 and Vector2.new(cl.X/JR,cl.Y/JR) or Vector2.zero
     end
-    joyOuter.InputBegan:Connect(function(inp)
-        if inp.UserInputType==Enum.UserInputType.Touch and not joyActive then
-            joyActive=true; joyInputId=inp
-            joyCenter=Vector2.new(joyOuter.AbsolutePosition.X+JOY_SIZE/2,joyOuter.AbsolutePosition.Y+JOY_SIZE/2)
-            updateJoy(Vector2.new(inp.Position.X,inp.Position.Y))
+    jOuter.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.Touch and not joyActive then
+            joyActive=true; joyInputId=i
+            joyCenter=Vector2.new(jOuter.AbsolutePosition.X+JS/2,jOuter.AbsolutePosition.Y+JS/2)
+            updateJoy(Vector2.new(i.Position.X,i.Position.Y))
         end
     end)
-    UIS.InputChanged:Connect(function(inp)
-        if joyActive and inp==joyInputId then updateJoy(Vector2.new(inp.Position.X,inp.Position.Y)) end
+    UIS.InputChanged:Connect(function(i)
+        if joyActive and i==joyInputId then updateJoy(Vector2.new(i.Position.X,i.Position.Y)) end
     end)
-    UIS.InputEnded:Connect(function(inp)
-        if inp==joyInputId then
+    UIS.InputEnded:Connect(function(i)
+        if i==joyInputId then
             joyActive=false; joyInputId=nil; mobileJoyVec=Vector2.zero
-            joyKnob.Position=UDim2.new(0.5,0,0.5,0)
+            jKnob.Position=UDim2.new(0.5,0,0.5,0)
         end
     end)
 
-    -- Action buttons — split into separate function to avoid register overflow
-    _buildMobileButtons(mobileGui, mCorner)
-    print("[REANIMATE] Mobile controls loaded")
+    -- ── Player selector (above joystick) ─────────────────
+    -- Tap a player name to lock them as the mouse-target for attacks
+    local SEL_W=200; local SEL_H=34
+    local selFrame=Instance.new("Frame",G)
+    selFrame.Size=UDim2.new(0,SEL_W,0,SEL_H)
+    selFrame.Position=UDim2.new(0,JM,1,-(JS+JM+SEL_H+10))
+    selFrame.BackgroundColor3=Color3.fromRGB(10,10,18)
+    selFrame.BackgroundTransparency=0.1
+    selFrame.BorderSizePixel=0; mc(selFrame,8)
+    ms(selFrame,Color3.fromRGB(80,120,200),1.2)
+
+    local selLbl=Instance.new("TextLabel",selFrame)
+    selLbl.Size=UDim2.new(1,-8,1,0); selLbl.Position=UDim2.new(0,8,0,0)
+    selLbl.BackgroundTransparency=1; selLbl.Font=Enum.Font.GothamBold
+    selLbl.TextSize=11; selLbl.TextColor3=Color3.fromRGB(180,180,255)
+    selLbl.TextXAlignment=Enum.TextXAlignment.Left
+    selLbl.Text="🎯 No target"
+
+    -- Scrollable player list that appears when tapping selector
+    local plListFrame=Instance.new("ScrollingFrame",G)
+    plListFrame.Size=UDim2.new(0,SEL_W,0,0)
+    plListFrame.Position=UDim2.new(0,JM,1,-(JS+JM+SEL_H+10))
+    plListFrame.BackgroundColor3=Color3.fromRGB(12,12,22)
+    plListFrame.BackgroundTransparency=0.05
+    plListFrame.BorderSizePixel=0; mc(plListFrame,8)
+    ms(plListFrame,Color3.fromRGB(80,120,200),1.2)
+    plListFrame.ScrollBarThickness=3
+    plListFrame.ScrollBarImageColor3=Color3.fromRGB(80,120,200)
+    plListFrame.CanvasSize=UDim2.new(0,0,0,0)
+    plListFrame.AutomaticCanvasSize=Enum.AutomaticSize.Y
+    plListFrame.Visible=false; plListFrame.ClipsDescendants=true
+    local plListLayout=Instance.new("UIListLayout",plListFrame)
+    plListLayout.SortOrder=Enum.SortOrder.Name
+    plListLayout.Padding=UDim.new(0,2)
+    Instance.new("UIPadding",plListFrame).PaddingTop=UDim.new(0,4)
+
+    local plListOpen=false
+    local function refreshPlayerList()
+        for _,c in plListFrame:GetChildren() do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+        -- "None" option
+        local none=Instance.new("TextButton",plListFrame)
+        none.Size=UDim2.new(1,-8,0,28); none.BackgroundColor3=Color3.fromRGB(40,20,20)
+        none.BorderSizePixel=0; none.Font=Enum.Font.Gotham; none.TextSize=11
+        none.TextColor3=Color3.fromRGB(200,100,100); none.Text="✕ Clear target"
+        none.AutoButtonColor=false; mc(none,6)
+        none.InputBegan:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.Touch then
+                mobileTarget=nil; selLbl.Text="🎯 No target"
+                plListFrame.Visible=false; plListOpen=false
+            end
+        end)
+        for _,pl in Players:GetPlayers() do
+            if pl==LP then continue end
+            local btn=Instance.new("TextButton",plListFrame)
+            btn.Size=UDim2.new(1,-8,0,28)
+            btn.BackgroundColor3=Color3.fromRGB(20,22,40)
+            btn.BorderSizePixel=0; btn.Font=Enum.Font.Gotham; btn.TextSize=11
+            btn.TextColor3=Color3.fromRGB(200,210,255); btn.Text="👤 "..pl.Name
+            btn.AutoButtonColor=false; mc(btn,6)
+            local cPl=pl
+            btn.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.Touch then
+                    mobileTarget=cPl
+                    selLbl.Text="🎯 "..cPl.Name
+                    plListFrame.Visible=false; plListOpen=false
+                end
+            end)
+        end
+    end
+
+    selFrame.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.Touch then
+            plListOpen=not plListOpen
+            if plListOpen then
+                refreshPlayerList()
+                local count=math.min(#Players:GetPlayers(),5)
+                plListFrame.Size=UDim2.new(0,SEL_W,0,count*30+12)
+                plListFrame.Position=UDim2.new(0,JM,1,-(JS+JM+SEL_H+10+count*30+12+4))
+                plListFrame.Visible=true
+            else
+                plListFrame.Visible=false
+            end
+        end
+    end)
+
+    -- Override mouse target functions to use mobileTarget when set
+    local _origGetMouseTargetPlayer=getMouseTargetPlayer
+    getMouseTargetPlayer=function()
+        if mobileTarget then
+            if mobileTarget.Character then return mobileTarget end
+            mobileTarget=nil; selLbl.Text="🎯 No target"
+        end
+        return _origGetMouseTargetPlayer()
+    end
+
+    -- ── Action buttons ────────────────────────────────────
+    _buildMobileButtons(G, mc)
+    print("[REANIMATE] Mobile UI loaded")
 end
 
-function _buildMobileButtons(mobileGui, mCorner)
-    local BS=58; local BG=8; local BM=16; local COLS=3
+function _buildMobileButtons(G, mc)
+    local BS=62; local BG=6; local BM=14; local COLS=3
     local totalW=COLS*(BS+BG)-BG
-    local totalH=4*(BS+BG)-BG  -- 4 rows
+    local totalH=4*(BS+BG)-BG
+
+    local function ms2(p,c) local s=Instance.new("UIStroke",p); s.Color=c; s.Thickness=1 end
+
     local defs={
-        {"PUNCH", Color3.fromRGB(200,80,80),   function() if swordEquipped then doSlash() else doPunch() end end},
-        {"STOMP", Color3.fromRGB(200,130,40),  function() doStomp() end},
-        {"SLASH", Color3.fromRGB(180,60,220),  function() doSlash() end},
-        {"SWORD", Color3.fromRGB(200,190,50),  function()
+        -- label, bg color, border color, action
+        {"PUNCH", Color3.fromRGB(180,50,50),   Color3.fromRGB(255,80,80),   function() if swordEquipped then doSlash() else doPunch() end end},
+        {"STOMP", Color3.fromRGB(170,100,20),  Color3.fromRGB(240,160,40),  function() doStomp() end},
+        {"SLASH", Color3.fromRGB(120,40,180),  Color3.fromRGB(180,80,255),  function() doSlash() end},
+        {"SWORD", Color3.fromRGB(160,150,20),  Color3.fromRGB(240,230,60),  function()
             if not rigAlive then return end
             swordEquipped=not swordEquipped
             if swordEquipped then task.spawn(spawnSword) else removeSword() end
         end},
-        {"GRAB",  Color3.fromRGB(60,160,220),  function() doGrab() end},
-        {"CAGE",  Color3.fromRGB(80,200,160),  function() doCage() end},
-        {"JUMP",  Color3.fromRGB(100,200,100), function() doJump() end},
-        {"ZAP",   Color3.fromRGB(240,220,60),  function() doZap() end},
-        {"LAY",   Color3.fromRGB(160,120,200), function()
+        {"GRAB",  Color3.fromRGB(20,110,180),  Color3.fromRGB(60,180,255),  function() doGrab() end},
+        {"CAGE",  Color3.fromRGB(20,140,110),  Color3.fromRGB(60,220,170),  function() doCage() end},
+        {"JUMP",  Color3.fromRGB(30,140,60),   Color3.fromRGB(80,220,120),  function() doJump() end},
+        {"ZAP",   Color3.fromRGB(180,160,10),  Color3.fromRGB(255,230,50),  function() doZap() end},
+        {"LAY",   Color3.fromRGB(100,60,160),  Color3.fromRGB(160,110,220), function()
             layingDown=not layingDown
             if layingDown then
                 local NP=7; layPoseIdx=math.random(1,NP)
@@ -2226,34 +2337,40 @@ function _buildMobileButtons(mobileGui, mCorner)
                 layPoseNext=nx; layPoseBlend=0; layPoseTimer=0; layPoseHoldTime=math.random(22,40)
             end
         end},
-        {"DESTRUCT",Color3.fromRGB(220,60,60), function()
+        {"DESTRUCT",Color3.fromRGB(160,30,30), Color3.fromRGB(220,60,60),   function()
             local now=tick()
             if now-lastDestructTap<0.3 then chaosMode=not chaosMode; destructMode=chaosMode
             else if chaosMode then chaosMode=false end; destructMode=not destructMode end
             lastDestructTap=now
         end},
-        {"HUD",   Color3.fromRGB(80,160,255),  function() sg.Enabled=not sg.Enabled end},
-        {"REGEN", Color3.fromRGB(80,200,120),  function() rigAlive=false; task.spawn(regen) end},
+        {"HUD",   Color3.fromRGB(30,80,160),   Color3.fromRGB(80,150,255),  function() sg.Enabled=not sg.Enabled end},
+        {"REGEN", Color3.fromRGB(20,120,60),   Color3.fromRGB(60,200,110),  function() rigAlive=false; task.spawn(regen) end},
     }
+
     for idx,def in defs do
         local col=(idx-1)%COLS; local row=math.floor((idx-1)/COLS)
-        local btn=Instance.new("TextButton",mobileGui)
+        local btn=Instance.new("TextButton",G)
         btn.Size=UDim2.new(0,BS,0,BS)
         btn.Position=UDim2.new(1,-(totalW+BM)+col*(BS+BG), 1,-(totalH+BM)+row*(BS+BG))
-        btn.BackgroundColor3=def[2]; btn.BackgroundTransparency=0.25
-        btn.BorderSizePixel=0; btn.Font=Enum.Font.GothamBold
-        btn.TextSize=11; btn.TextColor3=Color3.fromRGB(255,255,255)
-        btn.Text=def[1]; btn.AutoButtonColor=false
-        mCorner(btn,10)
-        local action=def[3]
-        btn.InputBegan:Connect(function(inp)
-            if inp.UserInputType==Enum.UserInputType.Touch then
-                btn.BackgroundTransparency=0.05; action()
+        btn.BackgroundColor3=def[2]
+        btn.BackgroundTransparency=0.15
+        btn.BorderSizePixel=0
+        btn.Font=Enum.Font.GothamBold
+        btn.TextSize=10
+        btn.TextColor3=Color3.fromRGB(255,255,255)
+        btn.Text=def[1]
+        btn.AutoButtonColor=false
+        mc(btn,12); ms2(btn,def[3])
+
+        local action=def[4]
+        btn.InputBegan:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.Touch then
+                btn.BackgroundTransparency=0; action()
             end
         end)
-        btn.InputEnded:Connect(function(inp)
-            if inp.UserInputType==Enum.UserInputType.Touch then
-                btn.BackgroundTransparency=0.25
+        btn.InputEnded:Connect(function(i)
+            if i.UserInputType==Enum.UserInputType.Touch then
+                btn.BackgroundTransparency=0.15
             end
         end)
     end
